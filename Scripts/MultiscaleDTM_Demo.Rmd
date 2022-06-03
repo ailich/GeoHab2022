@@ -1,0 +1,183 @@
+---
+title: "MultiscaleDTM GeoHab 2022 Demo"
+output: html_notebook
+---
+```{r setup, echo = FALSE, include=FALSE}
+knitr::opts_chunk$set(error = TRUE, echo = FALSE, warning=FALSE, message=FALSE, results = 'hide')
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+
+# Uncomment and run these lines to install packages
+# install.packages("remotes")
+# install.packages('terra', repos='https://rspatial.r-universe.dev') #development version
+# install.packages('raster', repos='https://rspatial.r-universe.dev') #development version
+# install.packages("terra") #CRAN version
+# install.packages("raster") #CRAN version
+# install.packages("RStoolbox")
+# install.packages("tidyverse")
+# install.packages("colorRamps")
+# install.packages("tmap")
+# remotes::install_github("ailich/MultiscaleDTM") # You may need to install Rtools (https://github.com/ailich/MultiscaleDTM)
+
+library(colorRamps)
+library(tidyverse)
+library(tmap)
+```
+
+```{r eval=FALSE}
+#If you want to load the final environment from the whole analysis into R so you don't need to wait, run this chunk (Will only work if you've already ran it once to populate Outputs folder).
+load("Outputs/Renvironment.RData")
+
+library(MultiscaleDTM)
+library(RStoolbox)
+library(raster)
+
+r<- rast("Data/bathy5m.tif")
+TA<- rast("Outputs/TA.tif")
+rPCA$map<- brick("Outputs/rPCA.tif", overwrite=TRUE)
+unsup$map<- raster("Outputs/unsup.tif")
+```
+
+```{r}
+# Define some functions
+rPCA_prop_exp<- function (raster_pca) {
+    sd <- raster_pca$model$sdev
+    prop_exp <- (sd^2)/sum(sd^2)
+    return(prop_exp)
+} # Proportion of variance explained by PC
+
+rPCA_cum_exp<- function (raster_pca) {
+    sd <- raster_pca$model$sdev
+    prop_exp <- (sd^2)/sum(sd^2)
+    cum_exp <- cumsum(prop_exp)
+    return(cum_exp)
+} # Cumulative proportion of variance explained by PCs
+```
+
+# Purpose of Demo
+This is a quick demo to show the utility of the `MultiscaleDTM` package for seafloor habitat mapping. It will show how you can calculate all five classes of terrain attributes (slope, aspect, curvature, rugosity, and relative position) at multiple different spatial scales with just a few lines of code. Then a simple unsupervised classification procedure is shown as an example of how these terrain attributes can be used in further analyses in R via connection to other R packages.
+
+# Load package and data
+
+```{r echo=TRUE}
+library(MultiscaleDTM)
+
+r<- rast("Data/bathy5m.tif")
+plot(r, col= matlab.like(100), axes= FALSE, main = "Bathymetry (m)")
+```
+
+```{r include=FALSE}
+png(filename = "Outputs/bathy.png", width = 13, height = 8, units = "in", res = 300)
+plot(r, col= matlab.like(100), axes= FALSE, main = "Bathymetry (m)", cex.main=2.5, plg=list(loc="bottom"))
+dev.off()
+```
+
+
+# Calculate terrain attributes at multiple scales 
+
+```{r echo = TRUE}
+w<- c(3, 5, 7, 11, 17, 27, 43, 69)  #Set window Sizes
+
+TA<- rast() #Initialize multiband raster stack of terrain attributes
+for (i in w) {
+  SlpAspCurv<- Qfit(r, w = i, unit = "degrees", metrics = c("qslope", "qeastness", "qnorthness", "profc", "planc", "twistc", "meanc"), na.rm = TRUE, include_scale = TRUE)
+  
+  Rugosity<- AdjSD(r,w = i, na.rm = TRUE, include_scale = TRUE)
+  
+  RelativePosition<- TPI(r, w = i, na.rm = TRUE, include_scale = TRUE)
+  
+  TA<- c(TA, SlpAspCurv, Rugosity, RelativePosition) #Append to raster stack
+} 
+```
+
+
+```{r echo= TRUE, results='show'}
+nlyr(TA) #Yay, you've calculated 72 terrain attributes!
+```
+
+```{r}
+writeRaster(TA, "Outputs/TA.tif", overwrite=TRUE)
+```
+
+# Unsupervised Classification
+Unsupervised classification of raster data can be accomplished using the `RStoolbox` package.
+
+```{r echo =TRUE}
+library(RStoolbox)
+library(raster) #RStoolbox has not been fully upgraded to handle terra objects yet so we will need the raster package
+```
+
+
+## Principal Components Analysis
+
+PCA allows us to represent our data in a lower number of dimensions while still maintaining a large proportion of the variance. Additionally unlike our original variables which may be collinear, all principal components are orthogonal (i.e. uncorrrelated).
+
+```{r echo=TRUE}
+rPCA<- rasterPCA(raster::stack(TA), spca = TRUE, nSamples = NULL) #Run a standardized PCA (note: you have to convert to raster package object for RSToolbox)
+```
+
+```{r}
+writeRaster(rPCA$map, "Outputs/rPCA.tif", overwrite=TRUE)
+```
+
+```{r}
+PCA_df<- tibble(PC=1:nlayers(rPCA$map), Observed=rPCA$model$sdev^2, Total= rPCA_cum_exp(rPCA)) #dataframe of variance explained by principal components
+```
+
+We can see that after about the first principal components we retain approximately 90% of the variance, so it may be reasonable to only consider the first 20 principal components in our analysis.
+
+```{r}
+PCA_totalvar_plot<- ggplot(data = PCA_df, mapping = aes(x=PC, y = Total))+
+  geom_point()+
+  geom_line()+
+  xlab("Principal Component")+
+  ylab("Proportion of Total Variance")+
+  ggtitle("Cumulative Variance Explained")+
+  theme(plot.title = element_text(hjust = 0.5), text=element_text(size=20))+
+  scale_y_continuous(breaks = seq(from = floor(min(PCA_df$Total)*10)/10, to = 1, by=0.1),limits = c(floor(min(PCA_df$Total)*10)/10,1))+
+  scale_x_continuous(breaks = seq(from = 0, to = max(PCA_df$PC), by=10),limits = c(1,NA))
+PCA_totalvar_plot
+```
+
+### Plot of First 20 Principal Components
+
+```{r}
+plot(rPCA$map[[1:20]], col=matlab.like(100), nr=5, axes=FALSE, legend=FALSE, maxnl=20, maxpixels=ncell(rPCA$map))
+```
+
+```{r}
+png("Outputs/PCA_sel.png", width = 8, height=8, units = "in", res=300)
+plot(rPCA$map[[1:20]], col=matlab.like(100), nr=5, axes=FALSE, legend=FALSE, maxnl=20, maxpixels=ncell(rPCA$map), cex.main=2)
+dev.off()
+```
+
+## Unsupervised Classification
+Run unsupervised classification (k-means clustering) with five clusters on the first 20 principal components. 
+
+```{r echo=TRUE}
+set.seed(5) #Set random seed so that you get the same result each time
+unsup<- unsuperClass(rPCA$map[[1:20]], nClasses = 5, algorithm="MacQueen", clusterMap = FALSE)
+```
+
+```{r}
+writeRaster(unsup$map, filename= "Outputs/unsup.tif", overwrite=TRUE)
+```
+
+```{r}
+ctable<- data.frame(freq(unsup$map, useNA="no"))
+ctable<- ctable %>% arrange(desc(count))
+ctable<- ctable %>% mutate(color= c("blue", "green", "purple", "orange", "red")) %>% arrange(value)
+
+unsup_plot<- tm_shape(unsup$map)+
+  tm_raster(palette = ctable$color, style = "cat", legend.is.portrait = TRUE, title = "")+
+  tm_legend(legend.outside=TRUE, legend.outside.position = "right")
+unsup_plot
+```
+
+```{r}
+tmap_save(unsup_plot, "Outputs/unsup.png", width = 13, height = 8, units = "in", dpi = 300)
+```
+
+```{r}
+save.image("Outputs/Renvironment.RData")
+```
+

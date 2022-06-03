@@ -1,0 +1,494 @@
+---
+title: "Rugosity Simulation"
+output: 
+  html_notebook:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+---
+
+```{r setup, echo=FALSE, include=FALSE}
+knitr::opts_chunk$set(error = TRUE, echo = FALSE, warning=FALSE, message=FALSE, results = 'hide')
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+
+# Uncomment and run these lines to install packages
+# install.packages("remotes")
+# install.packages('terra', repos='https://rspatial.r-universe.dev') #development version
+# install.packages("terra") #CRAN version
+# install.packages("tidyverse")
+# install.packages("colorRamps")
+# remotes::install_github("ailich/MultiscaleDTM") # You may need to install Rtools (https://github.com/ailich/MultiscaleDTM)
+
+library(tidyverse)
+library(MultiscaleDTM)
+library(colorRamps)
+```
+
+```{r eval= FALSE}
+# Run this to load the final environment without recalculating everything (Will only work if you've already ran it once to populate Outputs folder) 
+load("Outputs/RugositySim_environment.RData")
+
+r<- rast("Data/bathy5m.tif")
+
+a<- rast(list.files("Data/artificial_surfaces", pattern = ".asc$", full.names = TRUE))
+names(a)<- c("Low", "Medium", "High")
+
+Low_fine<- rast("Outputs/Low_fine.grd")
+Medium_fine<- rast("Outputs/Medium_fine.grd")
+High_fine<- rast("Outputs/High_fine.grd")
+Real_fine<- rast("Outputs/Real_fine.grd")
+
+Low_broad<- rast("Outputs/Low_broad.grd")
+Medium_broad<- rast("Outputs/Medium_broad.grd")
+High_broad<- rast("Outputs/High_broad.grd")
+Real_broad<- rast("Outputs/Real_broad.grd")
+```
+
+
+# Purpose
+
+**Problem:** Measures of rugosity can often be confounded with slope.
+
+**Objective:** Test several rugosity measures to evaluate how well they measure rugosity independent of slope.
+
+# Methods
+- Calculate the slope and 4 rugosity measures
+    - Standard Deviation (SD)
+    - Adjusted Standard Deviation (AdjSD)
+    - Vector Ruggedness Measure (VRM)
+    - Surface Area to Planar Area Ratio with arc-chord correction (SAPA)
+
+- Do this at two different spatial scales
+    - Fine scale – 3 x 3 window (1 x 1 for SAPA)
+    - Broad scale – 17 x 17 window (15 x 15 for SAPA)
+    
+- Use 4 different data sets
+    - 3 simulated data sets of low, medium, and high complexity (Lecours et al., 2017)
+    - 1 real world data set (Barnhardt et al., 2010)
+
+- Measure the rank correlation (ρ) between slope and rugosity.
+
+Note: A smaller window size was used for SAPA since the slope correction is based on the boundary data immediately outside of the focal window making it appropriate to compare SAPA to the slope at the scale being used to adjust the planar area.
+
+# Analysis Code
+
+## Read in Data
+
+
+```{r echo=TRUE}
+r<- rast("Data/bathy5m.tif")
+
+a<- rast(list.files("Data/artificial_surfaces", pattern = ".asc$", full.names = TRUE))
+names(a)<- c("Low", "Medium", "High")
+```
+
+```{r}
+plot_labs<- c("Depth", "Slope", "SD", "VRM", "SAPA", "AdjSD")
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(a$Low, col= matlab.like(100), axes= FALSE, main = "Low Complexity", )
+plot(a$Medium, col= matlab.like(100), axes= FALSE, main = "Medium Complexity")
+plot(a$High, col= matlab.like(100), axes= FALSE, main = "High Complexity")
+plot(r, col= matlab.like(100), axes= FALSE, main = "Real Data", asp=ncol(r)/nrow(r))
+```
+
+## Fine Scale Analysis
+
+### Low Complexity
+```{r echo=TRUE}
+Low_fine<- SlpAsp(a$Low, w= 3, unit = "degrees", method = "queen", metrics = "slope")
+
+Low_fine<- c(Low_fine, focal(a$Low, w= 3, fun= sd, na.rm=FALSE))
+names(Low_fine)[2]<- "SD"
+
+Low_fine<- c(Low_fine, VRM(a$Low, w = 3, na.rm = FALSE))
+Low_fine<- c(Low_fine, SAPA(a$Low, w = 1, slope_correction = TRUE))
+Low_fine<- c(Low_fine, AdjSD(a$Low, w = 3, na.rm = FALSE))
+```
+
+```{r}
+plot(c(a$Low, Low_fine), col= matlab.like(100), axes= FALSE, main = plot_labs)
+```
+
+```{r}
+writeRaster(Low_fine, "Outputs/Low_fine.grd", overwrite=TRUE)
+```
+
+```{r}
+Low_fine_df<- tibble(Slope= values(Low_fine$slope),
+                        SD = values(Low_fine$SD),
+                        VRM = values(Low_fine$vrm),
+                        SAPA = values(Low_fine$sapa),
+                        AdjSD = values(Low_fine$adjSD))
+Low_fine_corr<- round(cor(Low_fine_df, method= "spearman", use = "pairwise.complete"),3)
+
+Low_fine_df<- Low_fine_df %>% pivot_longer(-Slope, names_to = "Measure", values_to = "Rugosity")
+Low_fine_df$Measure<- factor(Low_fine_df$Measure, levels = c("SD", "AdjSD", "VRM", "SAPA"), labels = paste0(c("SD",  "AdjSD", "VRM", "SAPA"), " (rho = ", c(Low_fine_corr["Slope", "SD"], Low_fine_corr["Slope", "AdjSD"], Low_fine_corr["Slope", "VRM"], Low_fine_corr["Slope", "SAPA"]),")"))
+```
+
+### Medium Complexity
+```{r echo=TRUE}
+Medium_fine<- SlpAsp(a$Medium, w= 3, unit = "degrees", method = "queen", metrics = "slope")
+
+Medium_fine<- c(Medium_fine, focal(a$Medium, w= 3, fun= sd, na.rm=FALSE))
+names(Medium_fine)[2]<- "SD"
+
+Medium_fine<- c(Medium_fine, VRM(a$Medium, w = 3, na.rm = FALSE))
+Medium_fine<- c(Medium_fine, SAPA(a$Medium, w = 1, slope_correction = TRUE))
+Medium_fine<- c(Medium_fine, AdjSD(a$Medium, w = 3, na.rm = FALSE))
+```
+
+```{r}
+writeRaster(Medium_fine, "Outputs/Medium_fine.grd", overwrite=TRUE)
+```
+
+```{r}
+plot(c(a$Medium, Medium_fine), col= matlab.like(100), axes= FALSE, main = plot_labs)
+```
+
+```{r}
+Medium_fine_df<- tibble(Slope= values(Medium_fine$slope), 
+                        SD = values(Medium_fine$SD),
+                        VRM = values(Medium_fine$vrm),
+                        SAPA = values(Medium_fine$sapa),
+                        AdjSD = values(Medium_fine$adjSD))
+Medium_fine_corr<- round(cor(Medium_fine_df, method= "spearman", use = "pairwise.complete"),3)
+
+Medium_fine_df<- Medium_fine_df %>% pivot_longer(-Slope, names_to = "Measure", values_to = "Rugosity")
+Medium_fine_df$Measure<- factor(Medium_fine_df$Measure, levels = c("SD", "AdjSD", "VRM", "SAPA"), labels = paste0(c("SD", "AdjSD", "VRM", "SAPA"), " (rho = ", c(Medium_fine_corr["Slope", "SD"], Medium_fine_corr["Slope", "AdjSD"], Medium_fine_corr["Slope", "VRM"], Medium_fine_corr["Slope", "SAPA"]),")"))
+```
+
+### High Complexity
+```{r echo=TRUE}
+High_fine<- SlpAsp(a$High, w= 3, unit = "degrees", method = "queen", metrics = "slope")
+
+High_fine<- c(High_fine, focal(a$High, w= 3, fun= sd, na.rm=FALSE))
+names(High_fine)[2]<- "SD"
+
+High_fine<- c(High_fine, VRM(a$High, w = 3, na.rm = FALSE))
+High_fine<- c(High_fine, SAPA(a$High, w = 1, slope_correction = TRUE))
+High_fine<- c(High_fine, AdjSD(a$High, w = 3, na.rm = FALSE))
+```
+
+```{r}
+plot(c(a$High, High_fine), col= matlab.like(100), axes= FALSE, main = plot_labs)
+```
+
+```{r}
+writeRaster(High_fine, "Outputs/High_fine.grd", overwrite=TRUE)
+```
+
+```{r}
+High_fine_df<- tibble(Slope= values(High_fine$slope), 
+                        SD = values(High_fine$SD),
+                        VRM = values(High_fine$vrm),
+                        SAPA = values(High_fine$sapa),
+                        AdjSD = values(High_fine$adjSD))
+High_fine_corr<- round(cor(High_fine_df, method= "spearman", use = "pairwise.complete"),3)
+
+High_fine_df<- High_fine_df %>% pivot_longer(-Slope, names_to = "Measure", values_to = "Rugosity")
+High_fine_df$Measure<- factor(High_fine_df$Measure, levels = c("SD", "AdjSD", "VRM", "SAPA"), labels = paste0(c("SD", "AdjSD", "VRM", "SAPA"), " (rho = ", c(High_fine_corr["Slope", "SD"],High_fine_corr["Slope", "AdjSD"], High_fine_corr["Slope", "VRM"], High_fine_corr["Slope", "SAPA"]),")"))
+```
+
+### Real Data
+```{r echo=TRUE}
+Real_fine<- SlpAsp(r, w= 3, unit = "degrees", method = "queen", metrics = "slope")
+
+Real_fine<- c(Real_fine, focal(r, w= 3, fun= sd, na.rm=FALSE))
+names(Real_fine)[2]<- "SD"
+
+Real_fine<- c(Real_fine, VRM(r, w = 3, na.rm = FALSE))
+Real_fine<- c(Real_fine, SAPA(r, w = 1, slope_correction = TRUE))
+Real_fine<- c(Real_fine, AdjSD(r, w = 3, na.rm = FALSE))
+```
+
+```{r}
+plot(c(r, Real_fine), col= matlab.like(100), axes= FALSE, main = plot_labs)
+```
+
+```{r}
+writeRaster(Real_fine, "Outputs/Real_fine.grd", overwrite=TRUE)
+```
+
+
+```{r}
+set.seed(5)
+Real_fine_df<- spatSample(Real_fine, size=1e5, method="random", replace=FALSE, na.rm=TRUE, as.df=TRUE, values=TRUE)
+names(Real_fine_df)<- plot_labs[-1]
+Real_fine_corr<- round(cor(Real_fine_df, method= "spearman", use = "pairwise.complete"),3)
+
+Real_fine_df<- Real_fine_df %>% pivot_longer(-Slope, names_to = "Measure", values_to = "Rugosity")
+Real_fine_df$Measure<- factor(Real_fine_df$Measure, levels = c("SD", "AdjSD", "VRM", "SAPA"), labels = paste0(c("SD", "AdjSD", "VRM", "SAPA"), " (rho = ", c(Real_fine_corr["Slope", "SD"],Real_fine_corr["Slope", "AdjSD"], Real_fine_corr["Slope", "VRM"], Real_fine_corr["Slope", "SAPA"]),")"))
+```
+
+### Correlation Analysis
+
+```{r}
+fine_df<- bind_rows(Low_fine_df %>% mutate(Complexity="Low"),
+          Medium_fine_df %>% mutate(Complexity="Medium"),
+          High_fine_df %>% mutate(Complexity="High"),
+          Real_fine_df %>% mutate(Complexity="Real"))
+
+fine_df$Complexity<- factor(fine_df$Complexity, levels = c("Low", "Medium", "High", "Real"))
+
+fine_df<- fine_df %>% filter(!is.na(Rugosity))
+
+fine_df<- fine_df %>% mutate(Measure2 = stringr::str_extract(Measure, "^[:alpha:]+"))
+
+fine_df$Measure2<- factor(fine_df$Measure2, levels = c("SD", "AdjSD", "VRM", "SAPA"))
+
+fine_df<- fine_df %>% group_by(Complexity, Measure2) %>% 
+  mutate(Rugosity2=Rugosity/max(Rugosity)) %>%
+  ungroup()
+
+fine_corr_df<- fine_df %>% group_by(Measure2, Complexity) %>% summarize(rho = cor(Slope, Rugosity, method = "spearman"), .groups="drop")
+fine_corr_df<- fine_corr_df %>% mutate(x= if_else(Complexity=="Real", 6.5, 12), y=0.8)
+
+fine_corr_min_point<- tibble(Measure2=rep(unique(fine_df$Measure2), length(unique(fine_corr_df$Complexity))),
+                    Complexity= rep(unique(fine_corr_df$Complexity), each = length(unique(fine_df$Measure2))),
+                    x=0, y=0) #Point at origin so plot starts at 0 on x-axis
+
+fine_gg<- ggplot(data= fine_df, mapping = aes(x=Slope, y=Rugosity2))+
+  geom_point(na.rm = TRUE)+
+  ylab("Rugosity")+
+  facet_grid(rows=vars(Measure2), cols= vars(Complexity), scales="free")+
+  theme(axis.text.y=element_blank(), axis.ticks.y=element_blank(),strip.text.x = element_text(size = 20), strip.text.y = element_text(size = 20), axis.title=element_text(size=20))+
+  scale_y_continuous(sec.axis = sec_axis(~ . , name = "Measure", breaks = NULL, labels = NULL)) +
+  scale_x_continuous(sec.axis = sec_axis(~ . , name = "Complexity", breaks = NULL, labels = NULL))+
+  geom_label(data=fine_corr_df, mapping = aes(x=0, y=1, label=paste("rho", "==", round(rho,3))), col="red", parse=TRUE, hjust="left", vjust="top", size=5)+
+  geom_point(data= fine_corr_min_point, mapping= aes(x=x,y=y), alpha= 0) #Transparent point at 0,0
+```
+
+```{r}
+ggplot(data= fine_df, mapping = aes(x=Slope, y=Rugosity2))+
+  geom_point(na.rm = TRUE)+
+  ylab("Rugosity")+
+  facet_grid(rows=vars(Measure2), cols= vars(Complexity), scales="free")+
+  theme(axis.text.y=element_blank(), axis.ticks.y=element_blank(),strip.text.x = element_text(size = 10), strip.text.y = element_text(size = 10), axis.title=element_text(size=10))+
+  scale_y_continuous(sec.axis = sec_axis(~ . , name = "Measure", breaks = NULL, labels = NULL)) +
+  scale_x_continuous(sec.axis = sec_axis(~ . , name = "Complexity", breaks = NULL, labels = NULL))+
+  geom_label(data=fine_corr_df, mapping = aes(x=0, y=1, label=paste("rho", "==", round(rho,3))), col="red", parse=TRUE, hjust="left", vjust="top", size=3.5)+
+  geom_point(data= fine_corr_min_point, mapping= aes(x=x,y=y), alpha= 0) #Transparent point at 0,0
+```
+
+## Broad Scale Analysis
+
+### Low Complexity
+```{r echo=TRUE}
+Low_broad<- SlpAsp(a$Low, w= 17, unit = "degrees", method = "queen", metrics = "slope")
+
+Low_broad<- c(Low_broad, focal(a$Low, w= 17, fun= sd, na.rm=FALSE))
+names(Low_broad)[2]<- "SD"
+
+Low_broad<- c(Low_broad, VRM(a$Low, w = 17, na.rm = FALSE))
+Low_broad<- c(Low_broad, SAPA(a$Low, w = 15, slope_correction = TRUE))
+Low_broad<- c(Low_broad, AdjSD(a$Low, w = 17, na.rm = FALSE))
+```
+
+```{r}
+writeRaster(Low_broad, "Outputs/Low_broad.grd", overwrite=TRUE)
+```
+
+```{r}
+plot(c(a$Low,Low_broad), col= matlab.like(100), axes= FALSE, main = plot_labs)
+```
+
+```{r}
+Low_broad_df<- tibble(Slope= values(Low_broad$slope), 
+                        SD = values(Low_broad$SD),
+                        VRM = values(Low_broad$vrm),
+                        SAPA = values(Low_broad$sapa),
+                        AdjSD = values(Low_broad$adjSD))
+Low_broad_corr<- round(cor(Low_broad_df, method= "spearman", use = "pairwise.complete"),3)
+
+Low_broad_df<- Low_broad_df %>% pivot_longer(-Slope, names_to = "Measure", values_to = "Rugosity")
+Low_broad_df$Measure<- factor(Low_broad_df$Measure, levels = c("SD", "AdjSD", "VRM", "SAPA"), labels = paste0(c("SD", "AdjSD", "VRM", "SAPA"), " (rho = ", c(Low_broad_corr["Slope", "SD"], Low_broad_corr["Slope", "AdjSD"], Low_broad_corr["Slope", "VRM"], Low_broad_corr["Slope", "SAPA"]),")"))
+```
+
+### Medium Complexity
+```{r echo=TRUE}
+Medium_broad<- SlpAsp(a$Medium, w= 17, unit = "degrees", method = "queen", metrics = "slope")
+
+Medium_broad<- c(Medium_broad, focal(a$Medium, w= 17, fun= sd, na.rm=FALSE))
+names(Medium_broad)[2]<- "SD"
+
+Medium_broad<- c(Medium_broad, VRM(a$Medium, w = 17, na.rm = FALSE))
+Medium_broad<- c(Medium_broad, SAPA(a$Medium, w = 15, slope_correction = TRUE))
+Medium_broad<- c(Medium_broad, AdjSD(a$Medium, w = 17, na.rm = FALSE))
+```
+
+```{r}
+writeRaster(Medium_broad, "Outputs/Medium_broad.grd", overwrite=TRUE)
+```
+
+```{r}
+plot(c(a$Medium, Medium_broad), col= matlab.like(100), axes= FALSE, main = plot_labs)
+```
+
+
+```{r}
+Medium_broad_df<- tibble(Slope= values(Medium_broad$slope), 
+                        SD = values(Medium_broad$SD),
+                        VRM = values(Medium_broad$vrm),
+                        SAPA = values(Medium_broad$sapa),
+                        AdjSD = values(Medium_broad$adjSD))
+Medium_broad_corr<- round(cor(Medium_broad_df, method= "spearman", use = "pairwise.complete"),3)
+
+Medium_broad_df<- Medium_broad_df %>% pivot_longer(-Slope, names_to = "Measure", values_to = "Rugosity")
+Medium_broad_df$Measure<- factor(Medium_broad_df$Measure, levels = c("SD", "AdjSD", "VRM", "SAPA"), labels = paste0(c("SD", "AdjSD", "VRM", "SAPA"), " (rho = ", c(Medium_broad_corr["Slope", "SD"], Medium_broad_corr["Slope", "AdjSD"], Medium_broad_corr["Slope", "VRM"], Medium_broad_corr["Slope", "SAPA"]),")"))
+```
+
+### High Complexity
+```{r echo=TRUE}
+High_broad<- SlpAsp(a$High, w= 17, unit = "degrees", method = "queen", metrics = "slope")
+
+High_broad<- c(High_broad, focal(a$High, w= 17, fun= sd, na.rm=FALSE))
+names(High_broad)[2]<- "SD"
+
+High_broad<- c(High_broad, VRM(a$High, w = 17, na.rm = FALSE))
+High_broad<- c(High_broad, SAPA(a$High, w = 15, slope_correction = TRUE))
+High_broad<- c(High_broad, AdjSD(a$High, w = 17, na.rm = FALSE))
+```
+
+```{r}
+writeRaster(High_broad, "Outputs/High_broad.grd", overwrite=TRUE)
+```
+
+```{r}
+plot(c(a$High, High_broad), col= matlab.like(100), axes= FALSE, main = plot_labs)
+```
+
+```{r}
+High_broad_df<- tibble(Slope= values(High_broad$slope), 
+                        SD = values(High_broad$SD),
+                        VRM = values(High_broad$vrm),
+                        SAPA = values(High_broad$sapa),
+                        AdjSD = values(High_broad$adjSD))
+High_broad_corr<- round(cor(High_broad_df, method= "spearman", use = "pairwise.complete"),3)
+
+High_broad_df<- High_broad_df %>% pivot_longer(-Slope, names_to = "Measure", values_to = "Rugosity")
+High_broad_df$Measure<- factor(High_broad_df$Measure, levels = c("SD", "AdjSD", "VRM", "SAPA"), labels = paste0(c("SD", "AdjSD", "VRM", "SAPA"), " (rho = ", c(High_broad_corr["Slope", "SD"],High_broad_corr["Slope", "AdjSD"], High_broad_corr["Slope", "VRM"], High_broad_corr["Slope", "SAPA"]),")"))
+```
+
+### Real Data
+
+```{r echo=TRUE}
+Real_broad<- SlpAsp(r, w= 17, unit = "degrees", method = "queen", metrics = "slope")
+
+Real_broad<- c(Real_broad, focal(r, w= 17, fun= sd, na.rm=FALSE))
+names(Real_broad)[2]<- "SD"
+
+Real_broad<- c(Real_broad, VRM(r, w = 17, na.rm = FALSE))
+Real_broad<- c(Real_broad, SAPA(r, w = 15, slope_correction = TRUE))
+Real_broad<- c(Real_broad, AdjSD(r, w = 17, na.rm = FALSE))
+```
+
+```{r}
+writeRaster(Real_broad, "Outputs/Real_broad.grd", overwrite=TRUE)
+```
+
+```{r}
+plot(c(r, Real_broad), col= matlab.like(100), axes= FALSE, main = plot_labs)
+```
+
+
+```{r}
+set.seed(5)
+Real_broad_df<- spatSample(Real_broad, size=1e5, method="random",replace=FALSE, as.df=TRUE, values=TRUE, na.rm=TRUE)
+names(Real_broad_df)<- plot_labs[-1]
+Real_broad_corr<- round(cor(Real_broad_df, method= "spearman", use = "pairwise.complete"),3)
+
+Real_broad_df<- Real_broad_df %>% pivot_longer(-Slope, names_to = "Measure", values_to = "Rugosity")
+Real_broad_df$Measure<- factor(Real_broad_df$Measure, levels = c("SD", "AdjSD", "VRM", "SAPA"), labels = paste0(c("SD", "AdjSD", "VRM", "SAPA"), " (rho = ", c(Real_broad_corr["Slope", "SD"],Real_broad_corr["Slope", "AdjSD"], Real_broad_corr["Slope", "VRM"], Real_broad_corr["Slope", "SAPA"]),")"))
+```
+
+### Correlation Analysis
+
+```{r}
+broad_df<- bind_rows(Low_broad_df %>% mutate(Complexity="Low"),
+          Medium_broad_df %>% mutate(Complexity="Medium"),
+          High_broad_df %>% mutate(Complexity="High"),
+          Real_broad_df %>% mutate(Complexity="Real"))
+
+broad_df$Complexity<- factor(broad_df$Complexity, levels = c("Low", "Medium", "High", "Real"))
+
+broad_df<- broad_df %>% filter(!is.na(Rugosity))
+
+broad_df<- broad_df %>% mutate(Measure2 = stringr::str_extract(Measure, "^[:alpha:]+"))
+
+broad_df$Measure2<- factor(broad_df$Measure2, levels = c("SD", "AdjSD", "VRM", "SAPA"))
+
+broad_df<- broad_df %>% group_by(Complexity, Measure2) %>% 
+  mutate(Rugosity2=Rugosity/max(Rugosity)) %>%
+  ungroup()
+
+broad_corr_df<- broad_df %>% group_by(Measure2, Complexity) %>% summarize(rho = cor(Slope, Rugosity, method = "spearman"), .groups="drop")
+broad_corr_df<- broad_corr_df %>% mutate(x= if_else(Complexity=="Real", 6.5, 12), y=0.8)
+
+broad_corr_min_point<- tibble(Measure2=rep(unique(broad_df$Measure2), length(unique(broad_corr_df$Complexity))),
+                    Complexity= rep(unique(broad_corr_df$Complexity), each = length(unique(broad_df$Measure2))),
+                    x=0, y=0) #Point at origin so plot starts at 0 on x-axis
+
+broad_gg<- ggplot(data= broad_df, mapping = aes(x=Slope, y=Rugosity2))+
+  geom_point(na.rm = TRUE)+
+  ylab("Rugosity")+
+  facet_grid(rows=vars(Measure2), cols= vars(Complexity), scales="free")+
+  theme(axis.text.y=element_blank(), axis.ticks.y=element_blank(),strip.text.x = element_text(size = 20), strip.text.y = element_text(size = 20), axis.title=element_text(size=20))+
+  scale_y_continuous(sec.axis = sec_axis(~ . , name = "Measure", breaks = NULL, labels = NULL)) +
+  scale_x_continuous(sec.axis = sec_axis(~ . , name = "Complexity", breaks = NULL, labels = NULL))+
+  geom_label(data=broad_corr_df, mapping = aes(x=0, y=1, label=paste("rho", "==", round(rho,3))), col="red", parse=TRUE, hjust="left", vjust="top", size=5)+
+  geom_point(data= broad_corr_min_point, mapping= aes(x=x,y=y), alpha= 0) #Transparent point at 0,0
+```
+
+```{r}
+ggplot(data= broad_df, mapping = aes(x=Slope, y=Rugosity2))+
+  geom_point(na.rm = TRUE)+
+  ylab("Rugosity")+
+  facet_grid(rows=vars(Measure2), cols= vars(Complexity), scales="free")+
+  theme(axis.text.y=element_blank(), axis.ticks.y=element_blank(),strip.text.x = element_text(size = 10), strip.text.y = element_text(size = 10), axis.title=element_text(size=10))+
+  scale_y_continuous(sec.axis = sec_axis(~ . , name = "Measure", breaks = NULL, labels = NULL)) +
+  scale_x_continuous(sec.axis = sec_axis(~ . , name = "Complexity", breaks = NULL, labels = NULL))+
+  geom_label(data=broad_corr_df, mapping = aes(x=0, y=1, label=paste("rho", "==", round(rho,3))), col="red", parse=TRUE, hjust="left", vjust="top", size=3.5)+
+  geom_point(data= broad_corr_min_point, mapping= aes(x=x,y=y), alpha= 0) #Transparent point at 0,0
+```
+
+# Results
+
+```{r}
+corr_df<- bind_rows(mutate(fine_corr_df, Scale= "Fine"), mutate(broad_corr_df, Scale= "Broad"))
+```
+
+
+The traditional standard deviation is the only method here that does not account for the effect of slope. As such, this method generally shows the highest magnitude rank correlation with slope. It had the the highest |𝜌| in `r corr_df %>% group_by(Complexity, Scale) %>% filter(abs(rho)==max(abs(rho))) %>% filter(Measure2=="SD") %>% nrow()` of the 8 scenarios, and  |𝜌| ≥ 0.8 in all cases except for one. The strength of this relationship increased with decreasing complexity and finer spatial scale. Additionally, the relationship between standard deviation and slope was always positive. VRM and SAPA however displayed substantial negative correlations in all of the simulated data sets with the |𝜌| ranging from `r corr_df %>% filter(Measure2=="VRM" & Complexity != "Real") %>% summarize(min=round(min(abs(rho)),3)) %>% pull(min)` - `r corr_df %>% filter(Measure2=="VRM" & Complexity != "Real") %>% summarize(max=round(max(abs(rho)),3)) %>% pull(max)` for VRM, and `r corr_df %>% filter(Measure2=="SAPA" & Complexity != "Real") %>% summarize(min=round(min(abs(rho)),3)) %>% pull(min)` - `r corr_df %>% filter(Measure2=="SAPA" & Complexity != "Real") %>% summarize(max=round(max(abs(rho)),3)) %>% pull(max)` for SAPA. Adjusted standard deviation performed best in `r corr_df %>% group_by(Complexity, Scale) %>% filter(abs(rho)==min(abs(rho))) %>% filter(Measure2=="AdjSD") %>% nrow()` of the 8 scenarios, and for all 6 of scenarios on the simulated data sets. For the simulated data sets, |𝜌| was near zero for this measure and |𝜌| > 0.1 in only `r corr_df %>% filter(Measure2=="AdjSD" & abs(rho) > 0.1 & Complexity!="Real") %>% nrow()` of the six scenarios. While SAPA and VRM did not perform as well as adjusted standard deviation in the simulated data, all slope corrected measures showed similar performance in the real world data sets with rank correlations of about 0.5 - 0.6.
+
+# Conclusions
+- When slope is unaccounted for, rugosity measures are highly confounded with slope particularly for lower complexity areas and finer scale analyses.
+- The proposed adjusted standard deviation method provided the lowest magnitude rank correlation with slope regardless of data complexity or spatial scale for the simulated data.
+- For the real world data, all slope-corrected rugosity measures had very similar rank correlations with slope
+
+# References
+
+Barnhardt, W., Ackerman, S., Andrews, B., Baldwin, W., 2010. Geophysical and sampling data from the inner continental shelf: Duxbury to Hull, Massachusetts: (Open-File Report No. 2009–1072). U. S. Geological Survey.
+
+Lecours, V., Devillers, R., Simms, A.E., Lucieer, V.L., Brown, C.J., 2017. Towards a Framework for Terrain Attribute Selection in Environmental Studies. Environmental Modelling & Software 89, 19–30. https://doi.org/10.1016/j.envsoft.2016.11.027
+
+```{r}
+save.image("Outputs/RugositySim_environment.RData")
+```
+
+```{r include=FALSE}
+ggsave(fine_gg, filename = "Outputs/fine_gg.png", dpi=300, width = 18, height = 8, units = "in")
+ggsave(broad_gg, filename = "Outputs/broad_gg.png", dpi=300, width = 18, height = 8, units = "in")
+
+png(filename = "Outputs/Data.png", width = 9, height = 9, units = "in", res = 300)
+par(mfrow=c(2,2))
+plot(a$Low, col= matlab.like(100), axes= FALSE, main = "Low Complexity",cex.main=2.5, legend=FALSE)
+plot(a$Medium, col= matlab.like(100), axes= FALSE, main = "Medium Complexity",cex.main=2.5, legend=FALSE)
+plot(a$High, col= matlab.like(100), axes= FALSE, main = "High Complexity",cex.main=2.5, legend=FALSE)
+plot(r, col= matlab.like(100), axes= FALSE, main = "Real Data",cex.main=2.5, legend=FALSE, asp=ncol(r)/nrow(r))
+dev.off()
+```
+
+
